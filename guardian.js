@@ -279,8 +279,8 @@ class NetworkGuardian {
       cortensorSessionId: analysis.cortensorSessionId,
       validationRuns: analysis.validationRuns,
       confidenceScore: analysis.confidence,
-      attestationHash: ethers.utils.keccak256(
-        JSON.stringify({ healthData, analysis })
+      attestationHash: require('ethers').keccak256(
+        Buffer.from(JSON.stringify({ healthData, analysis }))
       ),
       ipfsHash: `ipfs-hash-${Date.now()}` // Would upload to IPFS
     };
