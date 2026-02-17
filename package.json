@@ -1,0 +1,26 @@
+{
+  "name": "network-guardian-ai",
+  "version": "1.0.0",
+  "description": "Decentralized Infrastructure Sentinel for Cortensor Network",
+  "main": "guardian.js",
+  "scripts": {
+    "start": "node guardian.js",
+    "dev": "nodemon guardian.js",
+    "test": "node test/test.js"
+  },
+  "keywords": ["cortensor", "agent", "monitoring", "infrastructure", "hackathon"],
+  "author": "Hackathon Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "ethers": "^6.8.0",
+    "socket.io": "^4.7.0",
+    "express": "^4.18.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
