@@ -7,6 +7,8 @@
 
 const axios = require('axios');
 const ethers = require('ethers');
+const http = require('http');
+const socketIo = require('socket.io');
 
 class NetworkGuardian {
   constructor() {
@@ -18,6 +20,53 @@ class NetworkGuardian {
       validatorUptime: 0.95 // 95%
     };
     this.isRunning = false;
+    this.io = null;
+    this.connectedClients = 0;
+    this.incidentHistory = [];
+  }
+
+  // Start WebSocket server and monitoring
+  async start() {
+    await this.startWebSocketServer();
+    await this.startMonitoring();
+  }
+
+  // Start WebSocket server for real-time dashboard
+  async startWebSocketServer() {
+    const server = http.createServer();
+    this.io = socketIo(server, {
+      cors: {
+        origin: "http://localhost:3000",
+        methods: ["GET", "POST"]
+      }
+    });
+
+    this.io.on('connection', (socket) => {
+      this.connectedClients++;
+      console.log(`📱 Dashboard client connected (${this.connectedClients} total)`);
+      
+      // Send current status immediately
+      socket.emit('status', {
+        isMonitoring: this.isRunning,
+        connectedClients: this.connectedClients,
+        incidentHistory: this.incidentHistory.slice(-10) // Last 10 incidents
+      });
+
+      socket.on('disconnect', () => {
+        this.connectedClients--;
+        console.log(`📱 Dashboard client disconnected (${this.connectedClients} total)`);
+      });
+
+      socket.on('requestHistoricalData', () => {
+        socket.emit('historicalData', this.incidentHistory);
+      });
+    });
+
+    const PORT = process.env.PORT || 3001;
+    server.listen(PORT, () => {
+      console.log(`🌐 WebSocket server running on port ${PORT}`);
+      console.log(`📊 Dashboard available at http://localhost:3000`);
+    });
   }
 
   // Core monitoring loop
@@ -243,11 +292,19 @@ class NetworkGuardian {
       evidenceBundle: await this.generateEvidenceBundle(healthData, analysis)
     };
     
+    // Add to incident history
+    this.incidentHistory.push(incidentReport);
+    
     // Send alerts
     await this.sendAlerts(incidentReport);
     
     // Store incident
     await this.storeIncident(incidentReport);
+    
+    // Emit incident to dashboard
+    if (this.io) {
+      this.io.emit('newIncident', incidentReport);
+    }
     
     console.log(`📋 Incident report generated: ${incidentReport.incidentId}`);
   }
@@ -325,13 +382,17 @@ ${incidentReport.recommendations.map(r => `• ${r}`).join('\n')}
       validatorHealth: `${(healthData.validators.healthRatio * 100).toFixed(1)}%`,
       networkSuccess: `${(healthData.network.successRate * 100).toFixed(1)}%`,
       activeMiners: healthData.miners.active,
-      lastIncident: analysis.anomalyDetected ? `INC-${Date.now()}` : null
+      lastIncident: analysis.anomalyDetected ? `INC-${Date.now()}` : null,
+      confidence: analysis.confidence,
+      severity: analysis.severity
     };
 
     console.log('📊 Dashboard Update:', dashboardData);
     
-    // In production, would emit via WebSocket
-    // io.emit('dashboardUpdate', dashboardData);
+    // Emit to all connected dashboard clients
+    if (this.io) {
+      this.io.emit('dashboardUpdate', dashboardData);
+    }
   }
 
   // Utility function for delays
@@ -357,8 +418,8 @@ if (require.main === module) {
     process.exit(0);
   });
   
-  // Start monitoring
-  guardian.startMonitoring().catch(console.error);
+  // Start both WebSocket server and monitoring
+  guardian.start().catch(console.error);
 }
 
 module.exports = NetworkGuardian;
