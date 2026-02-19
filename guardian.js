@@ -84,7 +84,7 @@ class NetworkGuardian {
       });
     });
 
-    const PORT = process.env.PORT || 3001;
+    const PORT = process.env.PORT || 3002;
     server.listen(PORT, () => {
       console.log(`🌐 WebSocket server running on port ${PORT}`);
       console.log(`📊 Dashboard available at http://localhost:3000`);
