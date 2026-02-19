@@ -25,6 +25,25 @@ class NetworkGuardian {
     this.connectedClients = 0;
     this.incidentHistory = [];
     this.currentSession = null;
+    this.validatorScores = new Map(); // Store PoUW scores
+    this.workMetrics = {
+      totalInferences: 0,
+      usefulInferences: 0,
+      networkContributions: 0,
+      validationWork: 0
+    };
+    this.alertChannels = {
+      discord: {
+        enabled: process.env.DISCORD_ENABLED === 'true',
+        webhookUrl: process.env.DISCORD_WEBHOOK_URL,
+        channelId: process.env.DISCORD_CHANNEL_ID
+      },
+      telegram: {
+        enabled: process.env.TELEGRAM_ENABLED === 'true',
+        botToken: process.env.TELEGRAM_BOT_TOKEN,
+        chatId: process.env.TELEGRAM_CHAT_ID
+      }
+    };
   }
 
   // Start WebSocket server and monitoring
@@ -367,6 +386,7 @@ class NetworkGuardian {
           consensusScore: consensusResult.consensusScore,
           disagreementAnalysis: consensusResult.disagreementAnalysis
         },
+        pouwScore: await this.calculatePoUWScore('guardian-agent', 'inference', consensusResult),
         inferenceResults: inferenceResults.map(r => ({
           runId: r.runId,
           success: !r.error,
@@ -563,6 +583,170 @@ class NetworkGuardian {
     return variance;
   }
 
+  // PoUW (Proof of Useful Work) scoring system
+  async calculatePoUWScore(validatorId, workType, workResult) {
+    const currentScore = this.validatorScores.get(validatorId) || {
+      baseScore: 100,
+      workMultiplier: 1.0,
+      reliabilityScore: 1.0,
+      contributionScore: 0,
+      lastUpdated: new Date().toISOString()
+    };
+
+    // Calculate work contribution based on type
+    let contributionValue = 0;
+    this.workMetrics.totalInferences++;
+
+    switch (workType) {
+      case 'inference':
+        contributionValue = this.calculateInferenceWork(workResult);
+        this.workMetrics.usefulInferences++;
+        break;
+      case 'validation':
+        contributionValue = this.calculateValidationWork(workResult);
+        this.workMetrics.validationWork++;
+        break;
+      case 'monitoring':
+        contributionValue = this.calculateMonitoringWork(workResult);
+        this.workMetrics.networkContributions++;
+        break;
+      case 'incident_response':
+        contributionValue = this.calculateIncidentResponseWork(workResult);
+        break;
+      default:
+        contributionValue = 1; // Base contribution
+    }
+
+    // Update scores
+    currentScore.contributionScore += contributionValue;
+    currentScore.workMultiplier = Math.min(2.0, 1.0 + (currentScore.contributionScore / 1000));
+    currentScore.reliabilityScore = this.calculateReliabilityScore(validatorId, workResult);
+    currentScore.lastUpdated = new Date().toISOString();
+
+    // Calculate final PoUW score
+    const finalScore = Math.round(
+      currentScore.baseScore * 
+      currentScore.workMultiplier * 
+      currentScore.reliabilityScore + 
+      currentScore.contributionScore
+    );
+
+    this.validatorScores.set(validatorId, { ...currentScore, finalScore });
+    
+    return {
+      validatorId,
+      workType,
+      contributionValue,
+      finalScore,
+      workMultiplier: currentScore.workMultiplier,
+      reliabilityScore: currentScore.reliabilityScore
+    };
+  }
+
+  // Calculate inference work value
+  calculateInferenceWork(workResult) {
+    let baseValue = 10;
+    
+    // Quality factors
+    if (workResult.consensusScore > 0.8) baseValue *= 1.5;
+    if (workResult.confidence > 0.9) baseValue *= 1.2;
+    if (workResult.inferenceTime < 2000) baseValue *= 1.1; // Fast inference
+    
+    // Complexity bonus
+    if (workResult.severity === 'critical') baseValue *= 2.0;
+    if (workResult.anomalyDetected) baseValue *= 1.3;
+    
+    return Math.round(baseValue);
+  }
+
+  // Calculate validation work value
+  calculateValidationWork(workResult) {
+    let baseValue = 15;
+    
+    // Validation quality
+    if (workResult.validationRuns > 1) baseValue *= (1 + workResult.validationRuns * 0.2);
+    if (workResult.poiConsensus?.successfulRuns === workResult.poiConsensus?.totalRuns) {
+      baseValue *= 1.5;
+    }
+    
+    return Math.round(baseValue);
+  }
+
+  // Calculate monitoring work value
+  calculateMonitoringWork(workResult) {
+    let baseValue = 5;
+    
+    // Monitoring effectiveness
+    if (workResult.anomalyDetected) baseValue *= 2.0;
+    if (workResult.responseTime < 1000) baseValue *= 1.2;
+    
+    return Math.round(baseValue);
+  }
+
+  // Calculate incident response work value
+  calculateIncidentResponseWork(workResult) {
+    let baseValue = 25;
+    
+    // Response effectiveness
+    if (workResult.severity === 'critical') baseValue *= 2.0;
+    if (workResult.recommendations?.length > 2) baseValue *= 1.3;
+    if (workResult.confidence > 0.85) baseValue *= 1.2;
+    
+    return Math.round(baseValue);
+  }
+
+  // Calculate reliability score for validators
+  calculateReliabilityScore(validatorId, workResult) {
+    const history = this.getValidatorHistory(validatorId);
+    if (history.length === 0) return 1.0;
+
+    // Calculate success rate
+    const successRate = history.filter(h => h.success).length / history.length;
+    
+    // Calculate consistency (variance in performance)
+    const performanceVariance = this.calculateVariance(history.map(h => h.performance || 0));
+    const consistencyScore = Math.max(0.5, 1.0 - (performanceVariance / 100));
+    
+    // Calculate availability
+    const recentWork = history.filter(h => 
+      new Date(h.timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000)
+    ).length;
+    const availabilityScore = Math.min(1.0, recentWork / 10); // Max 10 works per day
+    
+    return (successRate * 0.4 + consistencyScore * 0.3 + availabilityScore * 0.3);
+  }
+
+  // Get validator work history
+  getValidatorHistory(validatorId) {
+    // In production, this would query a database
+    // For demo, return simulated history
+    return [
+      { success: true, performance: 85, timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString() },
+      { success: true, performance: 92, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString() },
+      { success: true, performance: 78, timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString() }
+    ];
+  }
+
+  // Get network-wide PoUW metrics
+  getNetworkPoUWMetrics() {
+    const totalValidators = this.validatorScores.size;
+    const totalScore = Array.from(this.validatorScores.values())
+      .reduce((sum, score) => sum + (score.finalScore || 0), 0);
+    
+    const averageScore = totalValidators > 0 ? totalScore / totalValidators : 0;
+    
+    return {
+      totalValidators,
+      totalScore,
+      averageScore,
+      workMetrics: this.workMetrics,
+      topValidators: Array.from(this.validatorScores.entries())
+        .sort(([,a], [,b]) => (b.finalScore || 0) - (a.finalScore || 0))
+        .slice(0, 5)
+        .map(([id, score]) => ({ validatorId: id, score: score.finalScore }))
+    };
+  }
+
   // Fallback analysis if Cortensor inference fails
   fallbackAnalysis(healthData) {
     const hasAnomaly = 
@@ -684,43 +868,313 @@ class NetworkGuardian {
     return affected;
   }
 
-  // Generate verifiable evidence bundle
+  // Generate verifiable evidence bundle with ERC-8004 attestation
   async generateEvidenceBundle(healthData, analysis) {
+    // Generate ERC-8004 attestation artifact
+    const attestationArtifact = await this.generateERC8004Artifact(healthData, analysis);
+    
+    // Calculate PoUW metrics
+    const pouwMetrics = this.getNetworkPoUWMetrics();
+    
     return {
       metricsSnapshot: healthData,
       analysisResult: analysis,
       cortensorSessionId: analysis.cortensorSessionId,
       validationRuns: analysis.validationRuns,
-      confidenceScore: analysis.confidence,
+      confidenceScore: analysis.confidence || analysis.averageConfidence,
       attestationHash: require('ethers').keccak256(
         Buffer.from(JSON.stringify({ healthData, analysis }))
       ),
-      ipfsHash: `ipfs-hash-${Date.now()}` // Would upload to IPFS
+      ipfsHash: `ipfs-hash-${Date.now()}`, // Would upload to IPFS
+      erc8004Artifact: attestationArtifact,
+      pouwMetrics: pouwMetrics,
+      timestamp: new Date().toISOString(),
+      version: '1.0.0'
     };
   }
 
-  // Send alerts to community channels
+  // Generate ERC-8004 attestation artifact
+  async generateERC8004Artifact(healthData, analysis) {
+    const artifact = {
+      // ERC-8004 standard fields
+      schemaVersion: 'erc8004-v1',
+      artifactType: 'network-analysis-attestation',
+      
+      // Agent identity
+      agent: {
+        id: 'network-guardian-ai',
+        version: '1.0.0',
+        publicKey: '0x1234567890123456789012345678901234567890', // Demo key
+        signature: await this.signArtifact(healthData, analysis)
+      },
+      
+      // Validation metadata
+      validation: {
+        method: 'poi-consensus',
+        runs: analysis.validationRuns || 1,
+        consensusScore: analysis.poiConsensus?.consensusScore || 0,
+        disagreementAnalysis: analysis.poiConsensus?.disagreementAnalysis || null,
+        pouwScore: analysis.pouwScore?.finalScore || 0
+      },
+      
+      // Evidence data
+      evidence: {
+        healthMetrics: healthData,
+        analysisResult: analysis,
+        timestamp: new Date().toISOString(),
+        dataSource: 'cortensor-network-v1'
+      },
+      
+      // Attestation metadata
+      attestation: {
+        authority: 'network-guardian-ai',
+        trustLevel: this.calculateTrustLevel(analysis),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+        chainId: 'cortensor-testnet',
+        transactionHash: null // Would be set if on-chain
+      },
+      
+      // Verification data
+      verification: {
+        merkleRoot: this.calculateMerkleRoot(healthData, analysis),
+        proof: await this.generateVerificationProof(healthData, analysis),
+        checksum: this.calculateChecksum(JSON.stringify({ healthData, analysis }))
+      }
+    };
+
+    return artifact;
+  }
+
+  // Sign artifact for ERC-8004 compliance
+  async signArtifact(healthData, analysis) {
+    // In production, would use actual private key signing
+    // For demo, return mock signature
+    const data = JSON.stringify({ healthData, analysis });
+    return `0x${Buffer.from(data).toString('hex').substring(0, 64)}`;
+  }
+
+  // Calculate trust level based on analysis quality
+  calculateTrustLevel(analysis) {
+    let trustScore = 50; // Base score
+    
+    // PoI consensus bonus
+    if (analysis.poiConsensus?.consensusScore > 0.8) trustScore += 20;
+    if (analysis.poiConsensus?.consensusScore > 0.9) trustScore += 10;
+    
+    // PoUW score bonus
+    if (analysis.pouwScore?.finalScore > 150) trustScore += 15;
+    
+    // Validation runs bonus
+    if (analysis.validationRuns >= 3) trustScore += 10;
+    
+    // Confidence bonus
+    const confidence = analysis.confidence || analysis.averageConfidence || 0;
+    if (confidence > 0.9) trustScore += 10;
+    if (confidence > 0.95) trustScore += 5;
+    
+    // Determine trust level
+    if (trustScore >= 90) return 'critical';
+    if (trustScore >= 80) return 'high';
+    if (trustScore >= 70) return 'medium';
+    if (trustScore >= 60) return 'low';
+    return 'minimal';
+  }
+
+  // Calculate Merkle root for evidence verification
+  calculateMerkleRoot(healthData, analysis) {
+    // Simplified Merkle root calculation
+    const data = JSON.stringify({ healthData, analysis });
+    const hash = require('ethers').keccak256(Buffer.from(data));
+    return hash;
+  }
+
+  // Generate verification proof
+  async generateVerificationProof(healthData, analysis) {
+    return {
+      type: 'cortensor-poi-pouw',
+      algorithm: 'keccak256',
+      inputs: [
+        'healthMetrics',
+        'analysisResult',
+        'consensusScore',
+        'pouwScore'
+      ],
+      proof: {
+        a: '0x1234...',
+        b: '0x5678...',
+        c: '0x9abc...'
+      }
+    };
+  }
+
+  // Calculate checksum for data integrity
+  calculateChecksum(data) {
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(data).digest('hex');
+  }
+
+  // Send alerts to community channels (Discord/Telegram)
   async sendAlerts(incidentReport) {
-    const alertMessage = `
-🚨 **Network Guardian Alert** 🚨
+    const alertMessage = this.formatAlertMessage(incidentReport);
+    
+    // Send to Discord
+    if (this.alertChannels.discord.enabled && this.alertChannels.discord.webhookUrl) {
+      await this.sendDiscordAlert(alertMessage, incidentReport);
+    }
+    
+    // Send to Telegram
+    if (this.alertChannels.telegram.enabled && this.alertChannels.telegram.botToken) {
+      await this.sendTelegramAlert(alertMessage, incidentReport);
+    }
+    
+    // Log to console
+    console.log('📢 ALERT SENT TO COMMUNITY:');
+    console.log(alertMessage);
+  }
+
+  // Format alert message for different platforms
+  formatAlertMessage(incidentReport) {
+    const severityEmoji = {
+      'low': '🟡',
+      'medium': '🟠', 
+      'high': '🔴',
+      'critical': '🚨'
+    };
+
+    const emoji = severityEmoji[incidentReport.severity] || '⚠️';
+    
+    return `
+${emoji} **Network Guardian Alert** ${emoji}
 
 **Incident**: ${incidentReport.incidentId}
 **Severity**: ${incidentReport.severity.toUpperCase()}
 **Confidence**: ${(incidentReport.confidence * 100).toFixed(1)}%
+**Trust Level**: ${incidentReport.evidenceBundle?.erc8004Artifact?.attestation?.trustLevel?.toUpperCase() || 'UNKNOWN'}
 **Affected**: ${incidentReport.affectedComponents.join(', ')}
+
+**Evidence**: ${incidentReport.evidenceBundle?.attestationHash || 'N/A'}
+**ERC-8004**: Available ✅
+**PoUW Score**: ${incidentReport.evidenceBundle?.pouwMetrics?.averageScore?.toFixed(1) || 'N/A'}
 
 **Recommendations**:
 ${incidentReport.recommendations.map(r => `• ${r}`).join('\n')}
 
-**Evidence**: ${incidentReport.evidenceBundle.attestationHash}
+---
+*Network Guardian AI - Cortensor Infrastructure Sentinel*
     `.trim();
+  }
 
-    console.log('📢 ALERT SENT TO COMMUNITY:');
-    console.log(alertMessage);
-    
-    // In production, would send to Discord/Telegram
-    // await sendToDiscord(alertMessage);
-    // await sendToTelegram(alertMessage);
+  // Send alert to Discord
+  async sendDiscordAlert(message, incidentReport) {
+    try {
+      const payload = {
+        content: message,
+        username: 'Network Guardian AI',
+        avatar_url: 'https://i.imgur.com/4M34hi2.png', // Network monitoring icon
+        embeds: [{
+          title: `Incident ${incidentReport.incidentId}`,
+          color: this.getSeverityColor(incidentReport.severity),
+          fields: [
+            {
+              name: 'Severity',
+              value: incidentReport.severity.toUpperCase(),
+              inline: true
+            },
+            {
+              name: 'Confidence',
+              value: `${(incidentReport.confidence * 100).toFixed(1)}%`,
+              inline: true
+            },
+            {
+              name: 'Trust Level',
+              value: incidentReport.evidenceBundle?.erc8004Artifact?.attestation?.trustLevel?.toUpperCase() || 'UNKNOWN',
+              inline: true
+            },
+            {
+              name: 'Affected Components',
+              value: incidentReport.affectedComponents.join(', '),
+              inline: false
+            },
+            {
+              name: 'Evidence Hash',
+              value: `\`${incidentReport.evidenceBundle?.attestationHash || 'N/A'}\``,
+              inline: false
+            }
+          ],
+          timestamp: new Date().toISOString(),
+          footer: {
+            text: 'Network Guardian AI • Cortensor Network'
+          }
+        }]
+      };
+
+      const response = await axios.post(this.alertChannels.discord.webhookUrl, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 5000
+      });
+
+      console.log('✅ Discord alert sent successfully');
+      return response.data;
+
+    } catch (error) {
+      console.log('❌ Failed to send Discord alert:', error.message);
+    }
+  }
+
+  // Send alert to Telegram
+  async sendTelegramAlert(message, incidentReport) {
+    try {
+      const telegramMessage = `
+🚨 *Network Guardian Alert* 🚨
+
+*Incident*: ${incidentReport.incidentId}
+*Severity*: ${incidentReport.severity.toUpperCase()}
+*Confidence*: ${(incidentReport.confidence * 100).toFixed(1)}%
+*Trust Level*: ${incidentReport.evidenceBundle?.erc8004Artifact?.attestation?.trustLevel?.toUpperCase() || 'UNKNOWN'}
+*Affected*: ${incidentReport.affectedComponents.join(', ')}
+
+*Evidence*: \`${incidentReport.evidenceBundle?.attestationHash || 'N/A'}\`
+*ERC-8004*: ✅ Available
+*PoUW Score*: ${incidentReport.evidenceBundle?.pouwMetrics?.averageScore?.toFixed(1) || 'N/A'}
+
+*Recommendations*:
+${incidentReport.recommendations.map(r => `• ${r}`).join('\n')}
+
+---
+_Network Guardian AI - Cortensor Infrastructure Sentinel_
+      `.trim();
+
+      const url = `https://api.telegram.org/bot${this.alertChannels.telegram.botToken}/sendMessage`;
+      
+      const payload = {
+        chat_id: this.alertChannels.telegram.chatId,
+        text: telegramMessage,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      };
+
+      const response = await axios.post(url, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 5000
+      });
+
+      console.log('✅ Telegram alert sent successfully');
+      return response.data;
+
+    } catch (error) {
+      console.log('❌ Failed to send Telegram alert:', error.message);
+    }
+  }
+
+  // Get Discord color code for severity
+  getSeverityColor(severity) {
+    const colors = {
+      'low': 16776960,    // Yellow
+      'medium': 16763955, // Orange
+      'high': 16711680,   // Red
+      'critical': 13369344 // Dark Red
+    };
+    return colors[severity] || 8421504; // Gray default
   }
 
   // Store incident for historical tracking
