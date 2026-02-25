@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Activity, AlertTriangle, CheckCircle, Server, Users, Network, Clock } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import io from 'socket.io-client';
+import { WEBSOCKET_URL } from './config';
 import './Dashboard.css';
 
 interface DashboardData {
@@ -35,7 +36,7 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     // Connect to WebSocket server
-    const newSocket = io('http://localhost:3001');
+    const newSocket = io(WEBSOCKET_URL);
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -50,21 +51,22 @@ const Dashboard: React.FC = () => {
 
     newSocket.on('dashboardUpdate', (data: DashboardData) => {
       setDashboardData(data);
-      setHistoricalData(prev => [...prev.slice(-19), {
-        time: new Date(data.timestamp).toLocaleTimeString(),
-        latency: data.routerLatency,
-        success: parseFloat(data.networkSuccess)
-      }]);
+      setHistoricalData(prev => {
+        const newData = [...prev, {
+          time: new Date(data.timestamp).toLocaleTimeString(),
+          latency: data.routerLatency,
+          health: parseFloat(data.validatorHealth)
+        }];
+        return newData.slice(-20); // Keep last 20 data points
+      });
     });
 
     newSocket.on('newIncident', (incident: Incident) => {
-      setIncidents(prev => [incident, ...prev.slice(0, 9)]);
+      setIncidents(prev => [incident, ...prev].slice(0, 10)); // Keep last 10 incidents
     });
 
-    newSocket.on('status', (status: any) => {
-      if (status.incidentHistory) {
-        setIncidents(status.incidentHistory);
-      }
+    newSocket.on('historicalData', (data: Incident[]) => {
+      setIncidents(data);
     });
 
     return () => {
