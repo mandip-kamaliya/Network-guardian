@@ -2,9 +2,9 @@
   "name": "network-guardian-ai",
   "version": "1.0.0",
   "description": "Decentralized Infrastructure Sentinel for Cortensor Network",
-  "main": "guardian.js",
+  "main": "guardian-production.js",
   "scripts": {
-    "start": "node guardian.js",
+    "start": "node guardian-production.js",
     "dev": "nodemon guardian.js",
     "test": "node test/test.js"
   },
